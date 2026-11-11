@@ -1,0 +1,154 @@
+---
+title: "Finding shifts in mean gene activity with FarmTest"
+author: "Ethan Chan"
+output:
+  pdf_document:
+    latex_engine: pdflatex
+  html_document:
+    toc: false
+    math_method: mathml
+fontsize: 11pt
+geometry: margin=0.8in
+header-includes:
+  #to make it look nice
+  - \raggedbottom
+  - \makeatletter
+  - \renewcommand{\maketitle}{\begingroup\raggedright{\Large\bfseries\@title\par}\smallskip{\normalsize\@author\par}\endgroup}
+  - \makeatother
+  - \AtBeginDocument{\raggedright}
+  - \usepackage{titlesec}
+  - \titlespacing*{\section}{0pt}{1.7ex plus .2ex}{0.7ex}
+  - \setlength{\parskip}{4pt plus 1pt}
+---
+
+```{r}
+#| include: false
+source("run_analysis.R", local = TRUE)
+source("04_Plots.R", local = TRUE)
+knitr::opts_chunk$set(echo = FALSE, dev = "png", dpi = 200, fig.align = "center",
+                      fig.width = 6.8, fig.height = 2.45, out.width = "91%")
+```
+
+```{=html}
+<style>
+h1 { font-size: 25px; margin: 20px 0 9px; }
+</style>
+```
+
+# Abstract
+
+Shared shifts and extreme readings can hide or mimic changes in mean gene activity. FarmTest estimates what the genes have in common and limits how much an extreme reading can pull a mean. In our simulation it found more true signals than ordinary t-tests, at the cost of more false discoveries.
+
+# 1. Motivation for testing genes together
+
+In a breast tumor study, we might screen for genes whose mean activity differs from a reference level. If we happen to sample many tumors rich in immune cells, several immune-related gene averages can rise together. One extreme reading can also skew an average. A t-test uses each gene alone. FarmTest uses the other genes to estimate how much of the shift they share.
+
+# 2. Simulation design and planted signals
+
+Following the example in Figure 5 of the paper, we generate one dataset with 100 independent samples and 500 genes. We use the random seed 29305. Here $X_{ij}$ is the reading for gene $j$ in sample $i$.
+
+$$
+X_{ij}=\underbrace{\mu_j}_{\text{true mean}}+\underbrace{b_{j1}f_{i1}+b_{j2}f_{i2}+b_{j3}f_{i3}}_{\text{shared contribution}}+\underbrace{u_{ij}}_{\text{noise in this reading}}.
+$$
+
+The first 125 genes are signals with true mean $\mu_j=0.6$. The other 375 have mean zero, our reference level. In each sample we draw three independent standard normal factor levels $f_{ik}$. Every gene in that sample sees the same three levels. Each gene has its own three weights, or loadings $b_{jk}$, drawn uniformly from $-1$ to $1$. A loading of 0.8 means a factor level of 2 adds 1.6 to that gene's reading.
+
+To allow for occasional extreme readings, we add independent $t_3$ noise $u_{ij}$ with three degrees of freedom and variance 3. We give FarmTest only the readings $X$.
+
+# 3. Testing gene 1
+
+```{r}
+gene <- gene1_example(dat$X[, 1], farm)
+```
+
+We planted gene 1's mean at 0.6, yet its 100 readings averaged $`r gene$average`$. Sample `r gene$lowest_sample` gave a reading of $`r gene$lowest_reading`$. The other 99 ranged from $`r gene$other_readings[1]`$ to $`r gene$other_readings[2]`$. We keep the extreme reading and use Huber loss to limit its pull on the mean.
+
+```{=latex}
+\noindent\begin{minipage}[c]{0.55\linewidth}
+```
+
+```{r}
+plot_huber_loss()
+```
+
+```{=latex}
+\end{minipage}\hfill\begin{minipage}[c]{0.42\linewidth}\raggedright
+```
+
+For a trial mean $m$, each reading leaves a gap $r=\text{reading}-m$. Its Huber loss is
+
+$$
+\ell_\tau(r)=
+\begin{cases}
+r^2/2 & |r|\leq\tau,\\
+\tau|r|-\tau^2/2 & |r|>\tau.
+\end{cases}
+$$
+
+Past the cutoff $\tau$, the penalty grows at a steady rate, limiting that reading's pull.
+
+```{=latex}
+\end{minipage}\par\smallskip
+```
+
+Each gene gets its own cutoff. Gene 1's is `r gene$cutoff`. At a trial mean of zero, sample 2 falls inside the cutoff, so its loss is $(-1.334)^2/2 \approx 0.89$. Sample `r gene$lowest_sample` falls well outside it. Its Huber loss is $10.41 \times 45 - 10.41^2/2 \approx `r gene$outlier_loss`$, compared with 1,013 under squared loss. The total Huber loss across all 100 readings is smallest at a mean of `r gene$huber_mean`.
+
+Gene 1's Huber mean still includes any shared shift. We use ordinary principal component analysis (PCA) to see which genes move together. A sample's score tells us how strongly it follows each pattern.
+
+```{r}
+pca <- prcomp(dat$X, center = TRUE, scale. = FALSE)
+variance <- 100 * pca$sdev^2 / sum(pca$sdev^2)
+cumulative <- cumsum(variance)
+pcs90 <- which(cumulative >= 90)[1]
+plot_pca_variance(variance, pcs90)
+```
+
+Start by using each gene's average to predict its 100 readings. Square the errors and add them across all 50,000 readings. Using three PC scores per sample cuts that total by 29.5%. It takes `r pcs90` PCs to explain 90.4% of the observed variation.
+
+In the simulation we know what the factors added to each reading. If we use each gene's average shared contribution as our guess for every sample, the squared errors add up to 51,902. Reconstructing those contributions along the first three PC directions from the noisy readings brings the error down to 4,085. As with $R^2$, the share explained is $1 - 4085/51902 \approx 92.1\%$.
+
+```{r}
+knitr::kable(pca_table(dat, pca$rotation, pcs90), digits = 1)
+```
+
+Keeping only three PCs could miss a weaker shared shift. Here the extra 68 PCs pick up just 1.5 more percentage points of shared variation. Most of what they add is gene-specific noise. Adjusting for those extra patterns could move estimated means farther from their true values.
+
+For testing, FarmTest estimates the patterns from $X$ while limiting the pull of extremes. It keeps `r farm$nFactors` factors because the sharpest relative drop in strength comes after the third. A second Huber fit relates the genes' Huber means to the estimated loadings to find each factor's average level. For gene 1, multiplying its loadings by those levels and adding gives a shared shift of $-0.164$. Subtracting it gives an adjusted mean of $0.190 - (-0.164) = 0.354$.
+
+The standard error estimates how much the adjusted mean would vary across studies. Gene 1's estimate is $0.354/0.171 \approx 2.07$ standard errors above zero. The individual readings have $t_3$ noise, but FarmTest uses a normal approximation for the adjusted mean across 100 samples. If $\mu_1=0$, a result at least this far from zero in either direction would occur about 3.8% of the time. That's a two-sided p-value of 0.038.
+
+`r gene$candidates` genes have p-values at or below gene 1's. How many might have landed on that list by chance? FarmTest counts `r gene$above_target` p-values above 0.05. A zero-mean gene lands there about 95% of the time, so the package estimates $354/0.95 \approx 373$ zero-mean genes overall. About $373 \times 0.038 \approx `r gene$expected_false`$ of them would make the list by chance.
+
+That gives an estimated false share of $14.2/140 \approx 10.1\%$, gene 1's adjusted p-value. It exceeds our 5% target, so FarmTest leaves gene 1 out. Since we planted its mean at 0.6, this is a **false negative**.
+
+# 4. Results across all 500 genes
+
+For the one-sample t-tests we used the Benjamini-Hochberg (BH) adjustment. Both methods target a 5% false discovery rate (FDR), the average false share of discoveries across repeated datasets.
+
+```{r}
+table_scores <- scores[c("Method", "True_discoveries", "False_discoveries", "Power", "FDP", "MSE")]
+table_scores$Power <- round(100 * table_scores$Power, 1)
+table_scores$FDP <- round(100 * table_scores$FDP, 1)
+table_scores$MSE <- round(table_scores$MSE, 4)
+knitr::kable(table_scores, col.names = c("Method", "True discoveries", "False discoveries", "Power (%)", "FDP (%)", "MSE"))
+```
+
+FarmTest found 116 of the 125 planted signals (92.8% power). Nine of its 125 discoveries were false, giving a false discovery proportion (FDP) of 7.2% in this dataset. Mean squared error (MSE) measures the average squared gap between the estimated and true gene means. It was 35.5% lower with FarmTest.
+
+```{r}
+plot_mean_comparison(dat, farm)
+```
+
+The bars count genes by estimated mean. The dashed lines mark the true means of the gray (0) and blue (0.6) genes. Moving down shows the effect of using Huber means. Moving right shows the effect of subtracting shared shifts. Both groups cluster closer to their true means in the bottom right panel.
+
+# 5. Conclusion and next steps
+
+FarmTest flagged 125 genes for follow-up, compared with 84 for t-tests with BH. In this dataset that meant **35 more true discoveries** at the cost of checking six more false leads.
+
+The table shows one dataset with 125 planted signals. Computing time limited our separate $t_3$ pilot to 20 repetitions per setting, compared with 1,000 in the paper. The $t_3$ errors have heavier tails than the paper's guarantee allows, so we would repeat this example to see whether the power gain holds and the FDP averages 5% or less.
+
+We would then halve every loading, turning a shared shift of 1.6 into 0.8. Keeping the means, factor levels and noise the same would let us see whether t-tests find nearly as many real signals when the shared shifts are smaller.
+
+For the team comparison, we would change means and loading patterns separately in two simulated gene panels. FarmTest would test the mean differences. My teammate's method (Düker and Pipiras, 2024) would test whether the same loading patterns describe both panels.
+
+We counted 198 breast tumors and 22,283 probe sets in NCBI GEO series GSE7390. After checking receptor labels, expression scale and missing values, and mapping probes to genes, we plan to compare mean activity in estrogen receptor-positive and receptor-negative tumors with two-sample FarmTest.

@@ -1,0 +1,3 @@
+"Method","Discoveries","False_discoveries","True_discoveries","FDP","Power","MSE"
+"t tests + BH",84,3,81,0.0357142857142857,0.648,0.0413570828269056
+"FarmTest",125,9,116,0.072,0.928,0.0266841094926149
