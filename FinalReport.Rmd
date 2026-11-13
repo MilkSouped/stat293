@@ -8,7 +8,7 @@ output:
     toc: false
     math_method: mathml
 fontsize: 11pt
-geometry: margin=0.8in
+geometry: margin=0.78in
 header-includes:
   #to make it look nice
   - \raggedbottom
@@ -61,7 +61,7 @@ To allow for occasional extreme readings, we add independent $t_3$ noise $u_{ij}
 gene <- gene1_example(dat$X[, 1], farm)
 ```
 
-We planted gene 1's mean at 0.6, yet its 100 readings averaged $`r gene$average`$. Sample `r gene$lowest_sample` gave a reading of $`r gene$lowest_reading`$. The other 99 ranged from $`r gene$other_readings[1]`$ to $`r gene$other_readings[2]`$. We keep the extreme reading and use Huber loss to limit its pull on the mean.
+We planted gene 1's mean at 0.6, yet its 100 readings averaged `r gene[["average"]]`. Sample `r gene[["lowest_sample"]]` gave a reading of `r gene[["lowest_reading"]]`. The other 99 ranged from `r gene[["other_readings"]][1]` to `r gene[["other_readings"]][2]`. We keep the extreme reading and use Huber loss to limit its pull on the mean.
 
 ```{=latex}
 \noindent\begin{minipage}[c]{0.55\linewidth}
@@ -91,7 +91,7 @@ Past the cutoff $\tau$, the penalty grows at a steady rate, limiting that readin
 \end{minipage}\par\smallskip
 ```
 
-Each gene gets its own cutoff. Gene 1's is `r gene$cutoff`. At a trial mean of zero, sample 2 falls inside the cutoff, so its loss is $(-1.334)^2/2 \approx 0.89$. Sample `r gene$lowest_sample` falls well outside it. Its Huber loss is $10.41 \times 45 - 10.41^2/2 \approx `r gene$outlier_loss`$, compared with 1,013 under squared loss. The total Huber loss across all 100 readings is smallest at a mean of `r gene$huber_mean`.
+Each gene gets its own cutoff. Gene 1's is `r gene[["cutoff"]]`. At a trial mean of zero, sample 2 falls inside the cutoff, so its loss is $(-1.334)^2/2 \approx 0.89$. Sample `r gene[["lowest_sample"]]` falls well outside it. Its Huber loss, $10.41 \times 45 - 10.41^2/2$, is about `r gene[["outlier_loss"]]`, compared with 1,013 under squared loss. The total Huber loss across all 100 readings is smallest at a mean of `r gene[["huber_mean"]]`.
 
 Gene 1's Huber mean still includes any shared shift. We use ordinary principal component analysis (PCA) to see which genes move together. A sample's score tells us how strongly it follows each pattern.
 
@@ -117,13 +117,15 @@ For testing, FarmTest estimates the patterns from $X$ while limiting the pull of
 
 The standard error estimates how much the adjusted mean would vary across studies. Gene 1's estimate is $0.354/0.171 \approx 2.07$ standard errors above zero. The individual readings have $t_3$ noise, but FarmTest uses a normal approximation for the adjusted mean across 100 samples. If $\mu_1=0$, a result at least this far from zero in either direction would occur about 3.8% of the time. That's a two-sided p-value of 0.038.
 
-`r gene$candidates` genes have p-values at or below gene 1's. How many might have landed on that list by chance? FarmTest counts `r gene$above_target` p-values above 0.05. A zero-mean gene lands there about 95% of the time, so the package estimates $354/0.95 \approx 373$ zero-mean genes overall. About $373 \times 0.038 \approx `r gene$expected_false`$ of them would make the list by chance.
+`r gene[["candidates"]]` genes have p-values at or below gene 1's. How many might have landed on that list by chance? FarmTest counts `r gene[["above_target"]]` p-values above 0.05. A zero-mean gene lands there about 95% of the time, so the package estimates $354/0.95 \approx 373$ zero-mean genes overall. Multiplying 373 by 0.038 gives about `r gene[["expected_false"]]` such genes on the list by chance.
 
 That gives an estimated false share of $14.2/140 \approx 10.1\%$, gene 1's adjusted p-value. It exceeds our 5% target, so FarmTest leaves gene 1 out. Since we planted its mean at 0.6, this is a **false negative**.
 
 # 4. Results across all 500 genes
 
 For the one-sample t-tests we used the Benjamini-Hochberg (BH) adjustment. Both methods target a 5% false discovery rate (FDR), the average false share of discoveries across repeated datasets.
+
+For this stress test, both methods use the same simulated gene readings, including the same latent factors and loadings. The t-tests use each gene's readings directly, leaving the shared factor contributions in place, while BH adjusts for multiple testing. FarmTest instead uses Huber estimation to limit the influence of extreme readings, estimates and subtracts shared factor contributions from the gene means before testing, and uses an estimated false discovery proportion to determine which genes to flag.
 
 ```{r}
 table_scores <- scores[c("Method", "True_discoveries", "False_discoveries", "Power", "FDP", "MSE")]
